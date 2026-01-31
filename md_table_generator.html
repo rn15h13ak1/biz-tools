@@ -1,0 +1,644 @@
+<!DOCTYPE html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Material MD Table Generator v1.2</title>
+
+    <link
+      rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/materialize/1.0.0/css/materialize.min.css"
+    />
+    <link
+      href="https://fonts.googleapis.com/icon?family=Material+Icons"
+      rel="stylesheet"
+    />
+    <link
+      rel="stylesheet"
+      href="https://bossanova.uk/jspreadsheet/v4/jexcel.css"
+      type="text/css"
+    />
+    <link
+      rel="stylesheet"
+      href="https://jsuites.net/v4/jsuites.css"
+      type="text/css"
+    />
+
+    <style>
+      body {
+        background-color: #f5f5f5;
+        display: flex;
+        min-height: 100vh;
+        flex-direction: column;
+        padding-bottom: 80px;
+      }
+      main {
+        flex: 1 0 auto;
+        padding-top: 20px;
+      }
+      .container {
+        width: 95%;
+        max-width: 1400px;
+      }
+      .nav-wrapper {
+        padding: 0 20px;
+      }
+
+      .card-content {
+        padding: 20px !important;
+      }
+
+      /* Spreadsheet Area Customization */
+      .jexcel_container {
+        width: 100%;
+        overflow-x: auto;
+      }
+      /* セル内改行を表示するための設定 */
+      .jexcel td {
+        white-space: pre-wrap !important;
+        vertical-align: top !important;
+        line-height: 1.2 !important;
+        text-align: left !important;
+      }
+
+      /* Output Area Customization */
+      #md-output {
+        height: 400px;
+        font-family: "Consolas", "Monaco", monospace;
+        background-color: #263238;
+        color: #eceff1;
+        padding: 15px;
+        border-radius: 4px;
+        overflow-y: auto;
+        white-space: pre;
+        border: none;
+        resize: none;
+        line-height: 1.5;
+      }
+      #md-output:focus {
+        outline: 1px solid #80cbc4;
+        background-color: #37474f;
+      }
+
+      /* Tool Bar */
+      .tool-bar {
+        margin-bottom: 15px;
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+        align-items: center;
+      }
+
+      /* Modal Styles */
+      .info-section h6 {
+        font-weight: bold;
+        border-left: 4px solid #26a69a;
+        padding-left: 10px;
+        margin-top: 20px;
+      }
+      .changelog-date {
+        color: #757575;
+        font-size: 0.8rem;
+        margin-right: 10px;
+      }
+      .modal .modal-content {
+        padding-bottom: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <nav class="teal lighten-1">
+      <div class="nav-wrapper">
+        <a href="#" class="brand-logo truncate"
+          ><i class="material-icons">grid_on</i>MD Table Gen</a
+        >
+        <ul id="nav-mobile" class="right hide-on-med-and-down">
+          <li>
+            <a class="modal-trigger" href="#infoModal"
+              ><i class="material-icons left">help_outline</i>Help</a
+            >
+          </li>
+          <li>
+            <a onclick="exportToExcel()"
+              ><i class="material-icons left">file_download</i>Export XLSX</a
+            >
+          </li>
+          <li>
+            <a onclick="clearData()"
+              ><i class="material-icons left">delete_sweep</i>Clear</a
+            >
+          </li>
+        </ul>
+        <a href="#" data-target="mobile-demo" class="sidenav-trigger right"
+          ><i class="material-icons">menu</i></a
+        >
+      </div>
+    </nav>
+
+    <ul class="sidenav" id="mobile-demo">
+      <li>
+        <a class="modal-trigger" href="#infoModal"
+          ><i class="material-icons">help_outline</i>使い方・履歴</a
+        >
+      </li>
+      <li>
+        <a onclick="exportToExcel()"
+          ><i class="material-icons">file_download</i>Excel出力</a
+        >
+      </li>
+      <li>
+        <a onclick="clearData()"
+          ><i class="material-icons">delete_sweep</i>クリア</a
+        >
+      </li>
+    </ul>
+
+    <main>
+      <div class="container">
+        <div class="row">
+          <div class="col s12 l7">
+            <div class="card z-depth-1">
+              <div class="card-content">
+                <span
+                  class="card-title teal-text text-lighten-1"
+                  style="font-weight: bold"
+                >
+                  <i class="material-icons left">edit</i>Data Input
+                </span>
+                <div class="tool-bar">
+                  <div class="btn-group">
+                    <button
+                      class="btn waves-effect waves-light teal lighten-2 btn-small"
+                      onclick="insertRow()"
+                    >
+                      <i class="material-icons left">add</i>行追加
+                    </button>
+                    <button
+                      class="btn waves-effect waves-light teal lighten-2 btn-small"
+                      onclick="insertCol()"
+                    >
+                      <i class="material-icons left">add</i>列追加
+                    </button>
+                  </div>
+                  <div class="btn-group" style="margin-left: 10px">
+                    <button
+                      class="btn waves-effect waves-light red darken-1 white-text btn-small"
+                      onclick="deleteRow()"
+                    >
+                      <i class="material-icons left">remove</i>行削除
+                    </button>
+                    <button
+                      class="btn waves-effect waves-light red darken-1 white-text btn-small"
+                      onclick="deleteCol()"
+                    >
+                      <i class="material-icons left">remove</i>列削除
+                    </button>
+                  </div>
+
+                  <span
+                    class="grey-text text-lighten-1"
+                    style="margin-left: auto; font-size: 0.8rem"
+                  >
+                    Alt+Enter (Mac: Option+Enter) でセル内改行
+                  </span>
+                </div>
+                <div id="spreadsheet"></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="col s12 l5">
+            <div class="card z-depth-1">
+              <div class="card-content">
+                <span
+                  class="card-title teal-text text-lighten-1"
+                  style="font-weight: bold"
+                >
+                  <i class="material-icons left">code</i>Markdown I/O
+                </span>
+                <div style="position: relative">
+                  <textarea
+                    id="md-output"
+                    placeholder="ここにMarkdownを貼り付けて「表に反映」を押すと変換できます"
+                  ></textarea>
+
+                  <button
+                    class="btn waves-effect waves-light orange darken-1"
+                    style="position: absolute; bottom: 20px; right: 80px"
+                    onclick="importMarkdown()"
+                    title="Markdownを表に反映（上書き）"
+                  >
+                    <i class="material-icons left">arrow_upward</i>表に反映
+                  </button>
+
+                  <button
+                    class="btn-floating btn-large waves-effect waves-light pink accent-3"
+                    style="position: absolute; bottom: 20px; right: 20px"
+                    onclick="copyToClipboard()"
+                    title="クリップボードにコピー"
+                  >
+                    <i class="material-icons">content_copy</i>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <div id="infoModal" class="modal modal-fixed-footer">
+      <div class="modal-content">
+        <h4>Information</h4>
+        <div class="row">
+          <div class="col s12">
+            <ul class="tabs">
+              <li class="tab col s6">
+                <a class="active" href="#help">使い方</a>
+              </li>
+              <li class="tab col s6"><a href="#changelog">変更履歴</a></li>
+            </ul>
+          </div>
+          <div id="help" class="col s12 info-section">
+            <h6><i class="material-icons tiny">touch_app</i> 基本操作</h6>
+            <p>
+              <strong>入力:</strong> 表にデータを入力してください。<br />
+              <strong>セル内改行:</strong> 編集モード中に
+              <span class="teal-text">Alt + Enter (Mac: Option + Enter)</span>
+              キーで改行できます。<br />
+              <strong>削除:</strong>
+              「行削除」「列削除」ボタンで、選択中のセルがある行/列（選択がない場合は末尾）を削除します。
+            </p>
+
+            <h6><i class="material-icons tiny">import_export</i> 変換仕様</h6>
+            <p>
+              <strong>スプレッドシート → Markdown:</strong><br />
+              セル内の改行は
+              <code>&lt;br&gt;</code> タグに変換されます。<br /><br />
+              <strong>Markdown → スプレッドシート:</strong><br />
+              Markdownテキスト内の <code>&lt;br&gt;</code> や
+              <code>&lt;br/&gt;</code>
+              は、スプレッドシート上の改行として復元されます。
+            </p>
+
+            <h6>
+              <i class="material-icons tiny">security</i>
+              セキュリティとデータ管理・免責事項
+            </h6>
+            <p>
+              本ツールは、入力された情報を<b
+                >インターネット上のサーバーへ送信・保存することは一切ありません。</b
+              ><br />
+              すべてのデータは、お使いのブラウザ内部（ローカルストレージ）および保存したHTMLファイル内にのみ記録される、機密性の高い設計となっております。<br />
+              <br />
+              <b>【免責事項】</b><br />
+              ただし、本ツールの使用によって生じた、いかなる損害やトラブル（データの消失・漏洩・予期せぬ動作等）についても、開発者は一切の責任を負いかねます。<br />
+              ご利用はご自身の責任においてお願いいたします。
+            </p>
+
+            <h6>
+              <i class="material-icons tiny">contact_support</i> 問い合わせ先
+            </h6>
+            <p>
+              不具合報告や機能追加の要望は、以下のGitHubリポジトリまでお願いいたします。<br />
+              <a
+                href="https://github.com/rn15h13ak1/md_table_generator"
+                target="_blank"
+                style="word-break: break-all"
+                >https://github.com/rn15h13ak1/md_table_generator</a
+              >
+            </p>
+          </div>
+          <div id="changelog" class="col s12 info-section">
+            <ul class="collection">
+              <li class="collection-item">
+                <span class="changelog-date">v1.2</span>
+                MacでのOption+Enter時の2重改行挙動を修正
+              </li>
+              <li class="collection-item">
+                <span class="changelog-date">v1.1</span>
+                削除時のデータ存在チェック機能を追加
+              </li>
+              <li class="collection-item">
+                <span class="changelog-date">v1.0</span>
+                初版リリース（基本機能）
+              </li>
+            </ul>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <a href="#!" class="modal-close waves-effect waves-green btn-flat"
+          >閉じる</a
+        >
+      </div>
+    </div>
+
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/materialize/1.0.0/js/materialize.min.js"></script>
+    <script src="https://jsuites.net/v4/jsuites.js"></script>
+    <script src="https://bossanova.uk/jspreadsheet/v4/jexcel.js"></script>
+    <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
+
+    <script>
+      let tableInstance = null;
+      const STORAGE_KEY = "md_table_data_v1";
+
+      // デフォルトの初期データ
+      const defaultData = [
+        ["機能", "ステータス", "備考"],
+        ["削除ボタン", "完了", "ツールバーに追加"],
+        ["高さ調整", "完了", "400pxに統一"],
+        ["改行対応", "完了", "Alt+Enterで入力可能\nMDでは<br>に変換"],
+      ];
+
+      document.addEventListener("DOMContentLoaded", function () {
+        // Materialize Init
+        M.Modal.init(document.querySelectorAll(".modal"));
+        M.Sidenav.init(document.querySelectorAll(".sidenav"));
+        M.Tabs.init(document.querySelectorAll(".tabs"));
+
+        // データのロード
+        let initialData = defaultData;
+        const lsData = localStorage.getItem(STORAGE_KEY);
+        if (lsData) {
+          try {
+            initialData = JSON.parse(lsData);
+          } catch (e) {
+            console.error(e);
+          }
+        }
+
+        const spreadsheetEl = document.getElementById("spreadsheet");
+
+        spreadsheetEl.addEventListener(
+          "keydown",
+          function (e) {
+            if (e.key === "Enter" && e.altKey) {
+              e.preventDefault();
+              e.stopPropagation();
+              document.execCommand("insertText", false, "\n");
+            }
+          },
+          true
+        );
+
+        // Jspreadsheet Init
+        tableInstance = jspreadsheet(spreadsheetEl, {
+          data: initialData,
+          minDimensions: [5, 10],
+          defaultColWidth: 120,
+          tableOverflow: true,
+          tableHeight: "400px", // Markdownエリアと同じ高さに設定
+          wordWrap: true, // セル内改行の表示を有効化
+
+          // Events
+          onchange: handleTableChange,
+          oninsertrow: handleTableChange,
+          ondeleterow: handleTableChange,
+          oninsertcolumn: handleTableChange,
+          ondeletecolumn: handleTableChange,
+          onpaste: handleTableChange,
+        });
+
+        generateMarkdown();
+      });
+
+      function handleTableChange() {
+        saveToLocalStorage();
+        generateMarkdown();
+      }
+
+      function saveToLocalStorage() {
+        const data = tableInstance.getData();
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+      }
+
+      // --- Spreadsheet -> Markdown ---
+      function generateMarkdown() {
+        const data = tableInstance.getData();
+        if (!data || data.length === 0) {
+          document.getElementById("md-output").value = "";
+          return;
+        }
+
+        let md = "";
+        // Header
+        const headers = data[0];
+        // ヘッダー内の改行も<br>にする
+        md +=
+          "| " + headers.map((h) => escapeAndFormat(h)).join(" | ") + " |\n";
+        md += "| " + headers.map(() => "---").join(" | ") + " |\n";
+
+        // Body
+        for (let i = 1; i < data.length; i++) {
+          const row = data[i];
+          md +=
+            "| " +
+            row.map((cell) => escapeAndFormat(cell)).join(" | ") +
+            " |\n";
+        }
+
+        document.getElementById("md-output").value = md;
+      }
+
+      // 改行を<br>に変換するヘルパー関数
+      function escapeAndFormat(cellValue) {
+        if (cellValue === null || cellValue === undefined) return "";
+        let str = String(cellValue);
+        return str.replace(/(\r\n|\r|\n)/g, "<br>");
+      }
+
+      // --- Markdown -> Spreadsheet ---
+      function importMarkdown() {
+        const mdText = document.getElementById("md-output").value;
+        if (!mdText.trim()) {
+          M.toast({ html: "Markdownを入力してください", classes: "red" });
+          return;
+        }
+
+        if (!confirm("現在の表の内容が上書きされます。よろしいですか？"))
+          return;
+
+        try {
+          const lines = mdText.split("\n");
+          const newData = [];
+
+          for (let line of lines) {
+            line = line.trim();
+            if (
+              !line ||
+              line.startsWith("|---") ||
+              line.startsWith("| ---") ||
+              !line.includes("|")
+            )
+              continue;
+
+            let row = line.split("|");
+            // 前後の空要素削除 (| data | の最初と最後)
+            if (row.length > 0 && row[0].trim() === "") row.shift();
+            if (row.length > 0 && row[row.length - 1].trim() === "") row.pop();
+
+            // セルデータの整形（<br>を改行に戻す）
+            row = row.map((cell) => {
+              let content = cell.trim();
+              // <br>, <br/>, <br /> を改行コード \n に置換
+              return content.replace(/<br\s*\/?>/gi, "\n");
+            });
+
+            if (row.length > 0) newData.push(row);
+          }
+
+          if (newData.length > 0) {
+            tableInstance.setData(newData);
+            saveToLocalStorage();
+            M.toast({ html: "Markdownを表に反映しました", classes: "teal" });
+          } else {
+            M.toast({
+              html: "有効なテーブル形式が見つかりませんでした",
+              classes: "orange",
+            });
+          }
+        } catch (e) {
+          console.error(e);
+          M.toast({ html: "変換エラーが発生しました", classes: "red" });
+        }
+      }
+
+      // --- 行・列の操作 ---
+      function insertRow() {
+        tableInstance.insertRow();
+      }
+      function insertCol() {
+        tableInstance.insertColumn();
+      }
+
+      function deleteRow() {
+        // 選択行があればそこを削除、なければ末尾を削除
+        // JspreadsheetのdeleteRowの引数は (index, count) だが
+        // 引数なしで呼ぶと選択行または末尾が削除される挙動を利用（または明示的に指定）
+        // より確実な挙動のために選択状態を確認
+        const selected = tableInstance.getSelectedRows();
+        let hasData = false;
+
+        if (selected.length > 0) {
+          for (let i = 0; i < selected.length; i++) {
+            const y = selected[i].getAttribute("data-y");
+            const rowData = tableInstance.getRowData(y);
+            if (rowData.some((c) => c !== "" && c !== null && c !== undefined))
+              hasData = true;
+          }
+        } else {
+          const totalRows = tableInstance.options.data.length;
+          if (totalRows > 0) {
+            const rowData = tableInstance.getRowData(totalRows - 1);
+            if (rowData.some((c) => c !== "" && c !== null && c !== undefined))
+              hasData = true;
+          }
+        }
+
+        if (
+          hasData &&
+          !confirm(
+            "削除しようとしている行にはデータが含まれています。削除しますか？"
+          )
+        ) {
+          return;
+        }
+
+        // selected はDOM要素の配列が返る場合があるため、選択がない場合は末尾削除を明示
+        // v4の挙動に合わせてシンプルに実行
+        if (selected.length > 0) {
+          tableInstance.deleteRow();
+        } else {
+          // 選択なしなら末尾を削除
+          const totalRows = tableInstance.options.data.length;
+          if (totalRows > 0) tableInstance.deleteRow(totalRows - 1);
+        }
+      }
+
+      function deleteCol() {
+        const selected = tableInstance.getSelectedColumns();
+        let hasData = false;
+
+        if (selected.length > 0) {
+          for (let i = 0; i < selected.length; i++) {
+            const x = selected[i].getAttribute("data-x");
+            const colData = tableInstance.getColumnData(x);
+            if (colData.some((c) => c !== "" && c !== null && c !== undefined))
+              hasData = true;
+          }
+        } else {
+          if (
+            tableInstance.options.data.length > 0 &&
+            tableInstance.options.data[0].length > 0
+          ) {
+            const lastColIndex = tableInstance.options.data[0].length - 1;
+            const colData = tableInstance.getColumnData(lastColIndex);
+            if (colData.some((c) => c !== "" && c !== null && c !== undefined))
+              hasData = true;
+          }
+        }
+
+        if (
+          hasData &&
+          !confirm(
+            "削除しようとしている列にはデータが含まれています。削除しますか？"
+          )
+        ) {
+          return;
+        }
+
+        if (selected.length > 0) {
+          tableInstance.deleteColumn();
+        } else {
+          if (
+            tableInstance.options.data.length > 0 &&
+            tableInstance.options.data[0].length > 0
+          ) {
+            const totalCols = tableInstance.options.data[0].length;
+            if (totalCols > 0) tableInstance.deleteColumn(totalCols - 1);
+          }
+        }
+      }
+
+      function clearData() {
+        if (confirm("全てのデータをクリアして初期状態に戻しますか？")) {
+          const emptyData = [
+            ["Header1", "Header2", "Header3"],
+            ["", "", ""],
+            ["", "", ""],
+          ];
+          tableInstance.setData(emptyData);
+          handleTableChange();
+          M.toast({ html: "クリアしました", classes: "teal" });
+        }
+      }
+
+      function exportToExcel() {
+        const data = tableInstance.getData();
+        const ws = XLSX.utils.aoa_to_sheet(data);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, "MarkdownTable");
+        const date = new Date();
+        const filename = `md_table_${date.getFullYear()}${
+          date.getMonth() + 1
+        }${date.getDate()}.xlsx`;
+        XLSX.writeFile(wb, filename);
+        M.toast({ html: "ダウンロードを開始しました", classes: "teal" });
+      }
+
+      function copyToClipboard() {
+        const copyText = document.getElementById("md-output");
+        copyText.select();
+        copyText.setSelectionRange(0, 99999);
+        navigator.clipboard.writeText(copyText.value).then(() => {
+          M.toast({
+            html: "Markdownをコピーしました！",
+            classes: "pink accent-3",
+          });
+        });
+      }
+    </script>
+  </body>
+</html>
