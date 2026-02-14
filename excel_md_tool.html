@@ -25517,28 +25517,52 @@ type MJRObject = {
         const suffix = document.getElementById("md-suffix").value;
 
         let md = "";
+
+        // フィルタリングに一致する行を処理
         state.currentData.forEach((row) => {
+          // データは文字列として比較
           if (String(row[colIdx]).trim() === val.trim()) {
-            state.currentHeaders.forEach((hRow, hIdx) => {
-              const prefixMd = "#".repeat(hIdx + 1);
-              hRow.forEach((hName, i) => {
-                let cellValue = row[i];
-                if (
-                  hName &&
-                  String(hName).trim() !== "" &&
-                  cellValue !== undefined &&
-                  String(cellValue).trim() !== ""
-                ) {
-                  let text = String(cellValue).replace(/\r\n/g, "<br>").replace(/\n/g, "<br>").trim();
-                  md += `${prefixMd} ${hName}\n${text}\n\n`;
+            // 各列（カラム）ごとに処理を行う
+            row.forEach((cellValue, colIndex) => {
+              let columnBuffer = ""; // この列の出力バッファ
+
+              // 1. ヘッダー行の出力
+              state.currentHeaders.forEach((hRow, hIdx) => {
+                let hName = hRow[colIndex]; // letに変更して再代入可能にする
+
+                if (hName && String(hName).trim() !== "") {
+                  // 改行コード(\r, \n)を全て削除する
+                  hName = String(hName).replace(/[\r\n]+/g, "");
+
+                  const prefixMd = "#".repeat(hIdx + 1);
+                  columnBuffer += `${prefixMd} ${hName}\n`;
                 }
               });
+
+              // 2. データ値の出力
+              // 値がある、またはヘッダーが表示されている場合は値エリアを表示する意図があれば出力
+              // ※要件「セルA3のデータを出力」に従い、値があれば出力します
+              if (cellValue !== undefined && String(cellValue).trim() !== "") {
+                let text = String(cellValue)
+                  .replace(/\r\n/g, "<br>\n") // <br>の後に改行を追加
+                  .replace(/\n/g, "<br>\n") // <br>の後に改行を追加
+                  .trim();
+                columnBuffer += `${text}\n`;
+              }
+
+              // 何らかの出力要素（ヘッダーまたは値）があればMarkdownに追加
+              // さらに列間の区切りとして改行を追加
+              if (columnBuffer.length > 0) {
+                md += columnBuffer + "\n";
+              }
             });
+
+            // レコード区切り
             md += "---\n\n";
           }
         });
 
-        // 文字列の末尾($)にある "---" と改行2つ(\n\n) を 空文字('') に置換して削除する
+        // 末尾の区切り線除去
         md = md.replace(/---\n\n$/, "");
 
         let finalOutput = "";
@@ -25558,6 +25582,10 @@ type MJRObject = {
       }
 
       const logs = [
+        {
+          version: "1.0.2",
+          desc: "Markdown生成ロジックの刷新 (列指向への変更、ヘッダー改行除去、データ内改行の可視化対応)",
+        },
         {
           version: "1.0.1",
           desc: "HTML保存時のセキュリティ向上 (入力値、パス、シート名などを初期化して保存するように修正)",
@@ -25686,7 +25714,7 @@ type MJRObject = {
       };
       document.addEventListener("DOMContentLoaded", () => {
         try {
-          document.getElementById("app-version").textContent = `v${"1.0.1"}`;
+          document.getElementById("app-version").textContent = `v${"1.0.2"}`;
         } catch (e) {
           console.log("Dev mode: Version not injected");
         }
