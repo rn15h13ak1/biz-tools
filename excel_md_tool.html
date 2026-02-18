@@ -25280,7 +25280,7 @@ type MJRObject = {
               range: rangeStr,
               defval: "",
               raw: false, // 【重要】生データではなく、フォーマットされた文字列を取得する
-              dateNF: "yyyy-mm-dd", // 書式設定がない日付セルのデフォルトフォーマットを指定
+              dateNF: "yyyy/mm/dd", // 書式設定がない日付セルのデフォルトフォーマットを指定
             });
             const filteredData = rawData.filter((row) => row.some((cell) => String(cell).trim() !== ""));
 
@@ -25547,9 +25547,9 @@ type MJRObject = {
               // ※要件「セルA3のデータを出力」に従い、値があれば出力します
               if (cellValue !== undefined && String(cellValue).trim() !== "") {
                 let text = String(cellValue)
-                  // すべての改行コード(\r\n, \r, \n)を統一的に <br> + 改行 に置換
-                  // これにより二重置換を防ぎ、Windows/Mac/Linuxの差異を吸収します
-                  .replace(/(\r\n|\n|\r)/g, "<br>\n")
+                  // すべての改行コード(\r\n, \r, \n)を統一的に <br> のみに置換
+                  // 要件変更: 改行コードを含めず <br> タグのみとすることで、Markdownテーブル内での表示崩れを防ぎます
+                  .replace(/(\r\n|\n|\r)/g, "<br>")
                   .trim();
                 columnBuffer += `${text}\n`;
               }
@@ -25586,6 +25586,10 @@ type MJRObject = {
       }
 
       const logs = [
+        {
+          version: "1.0.5",
+          desc: "Markdown生成時の改行処理を変更 (データ内の改行を <br> タグのみに置換し、余分な改行コードを除去)",
+        },
         {
           version: "1.0.4",
           desc: "Excelの日付データが数値（シリアル値）になる問題を修正 (書式設定を維持して読み込むように変更)",
@@ -25726,7 +25730,7 @@ type MJRObject = {
       };
       document.addEventListener("DOMContentLoaded", () => {
         try {
-          document.getElementById("app-version").textContent = `v${"1.0.4"}`;
+          document.getElementById("app-version").textContent = `v${"1.0.5"}`;
         } catch (e) {
           console.log("Dev mode: Version not injected");
         }
