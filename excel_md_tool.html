@@ -25184,140 +25184,290 @@ type MJRObject = {
         },
       };
 
+      // DOM要素の参照を解決するヘルパー
+      function getEl(id) {
+        return document.getElementById(id);
+      }
+
+      // 列名リスト (A, B, ..., Z, AA, ...)
+      function getColLabel(index) {
+        let label = "";
+        let i = index;
+        while (i >= 0) {
+          label = String.fromCharCode((i % 26) + 65) + label;
+          i = Math.floor(i / 26) - 1;
+        }
+        return label;
+      }
+
+      // ファイル選択時の処理
       function handleFileSelection(file) {
         if (!file) return;
-        document.getElementById("loader").style.display = "flex";
-        document.getElementById("file-status").textContent = file.name;
-        document.getElementById("file-status").style.color = "var(--md-sys-color-on-surface)";
 
         const reader = new FileReader();
-        reader.onload = function (e) {
+        reader.onload = (e) => {
           const data = new Uint8Array(e.target.result);
-          // cellDates: true を追加し、日付セルを数値ではなく日付オブジェクトとして認識させます
-          state.currentWorkbook = readSync(data, { type: "array", cellDates: true });
+          const workbook = readSync(data, { type: "array" });
+          state.currentWorkbook = workbook;
 
-          const selector = document.getElementById("sheet-selector");
-          selector.innerHTML = '<option value="" disabled selected>シート名を選択してください</option>';
-          state.currentWorkbook.SheetNames.forEach((name) => {
-            const opt = new Option(name, name);
-            selector.add(opt);
+          const sheetSelect = getEl("sheet-selector");
+          sheetSelect.innerHTML = "";
+          workbook.SheetNames.forEach((name) => {
+            const opt = document.createElement("option");
+            opt.value = name;
+            opt.textContent = name;
+            sheetSelect.appendChild(opt);
           });
+          sheetSelect.removeAttribute("disabled");
+          sheetSelect.selectedIndex = 0;
 
+          getEl("file-status").textContent = file.name;
+          getEl("file-status").style.fontWeight = "bold";
+          getEl("btn-process").disabled = false;
+
+          // シート変更時に列を更新
           updateColumnSelectors();
-          document.getElementById("btn-process").disabled = false;
-          document.getElementById("loader").style.display = "none";
         };
         reader.readAsArrayBuffer(file);
       }
 
+      // シート・行設定に応じた列セレクタの更新
       function updateColumnSelectors() {
         if (!state.currentWorkbook) return;
-        const sheetName = document.getElementById("sheet-selector").value;
-        if (!sheetName) return;
+        const sheetName = getEl("sheet-selector").value;
+        const worksheet = state.currentWorkbook.Sheets[sheetName];
+        if (!worksheet) return;
 
-        const sheet = state.currentWorkbook.Sheets[sheetName];
-        let headerRowIndex = parseInt(document.getElementById("row-header-start").value) || 1;
+        const range = utils.decode_range(worksheet["!ref"] || "A1:A1");
+        const colStart = range.s.c;
+        const colEnd = range.e.c;
 
-        let maxColIndex = 0;
-        Object.keys(sheet).forEach((key) => {
-          if (key[0] === "!") return;
-          const decode = utils.decode_cell(key);
-          if (decode.c > maxColIndex) maxColIndex = decode.c;
-        });
+        // Header行にある値を取得してプルダウンに表示
+        const hRowInput = parseInt(getEl("row-header-start").value) || 1;
+        const hRowIndex = hRowInput - 1; // 0-based
 
-        const startSel = document.getElementById("col-start-selector");
-        const endSel = document.getElementById("col-end-selector");
-        startSel.innerHTML = "";
-        endSel.innerHTML = "";
+        const createOptions = (selectedVal) => {
+          let html = "";
+          for (let c = colStart; c <= colEnd; c++) {
+            const cellAddress = utils.encode_cell({ r: hRowIndex, c: c });
+            const cell = worksheet[cellAddress];
+            let cellVal = cell ? cell.v : "";
+            const colLetter = getColLabel(c);
+            const label = `${colLetter} : ${cellVal}`;
+            const isSelected = colLetter === selectedVal ? "selected" : "";
+            html += `<option value="${colLetter}" ${isSelected}>${label}</option>`;
+          }
+          return html;
+        };
 
-        const displayLimit = Math.max(maxColIndex, 50);
+        const currentStart = getEl("col-start-selector").value || "A";
+        const currentEnd = getEl("col-end-selector").value; // 未指定なら末尾にしたい
 
-        for (let i = 0; i <= displayLimit; i++) {
-          const colLetter = utils.encode_col(i);
-          const cell = sheet[colLetter + headerRowIndex];
-          const headerText = cell ? String(cell.v).trim() : "";
-          const label = headerText ? `${colLetter}列 (${headerText})` : `${colLetter}列`;
+        const startHtml = createOptions(currentStart);
+        getEl("col-start-selector").innerHTML = startHtml;
 
-          startSel.add(new Option(label, colLetter));
-          const optE = new Option(label, colLetter);
-          if (i === maxColIndex) optE.selected = true; // デフォルトで末尾を選択
-          endSel.add(optE);
-        }
+        // 終了列のデフォルトは範囲の最後
+        const lastColLetter = getColLabel(colEnd);
+        const endHtml = createOptions(currentEnd || lastColLetter);
+        getEl("col-end-selector").innerHTML = endHtml;
+
+        // フィルタ列セレクタも更新
+        const filterOpts = createOptions("");
+        // 削除: 旧フィルタ項目の更新処理を除去
+        // getEl("filter-col-index").innerHTML = ...
+
+        getEl("preview-filter-col-1").innerHTML = '<option value="" selected>（なし）</option>' + filterOpts;
+        getEl("preview-filter-col-2").innerHTML = '<option value="" selected>（なし）</option>' + filterOpts;
+        getEl("preview-filter-col-3").innerHTML = '<option value="" selected>（なし）</option>' + filterOpts;
       }
 
+      // 解析実行
       function processExcel() {
-        const sheetName = document.getElementById("sheet-selector").value;
-        if (!sheetName) {
-          M.toast({ html: "シート名を選択してください" });
+        if (!state.currentWorkbook) return;
+
+        // ローディング表示
+        const loader = getEl("loader");
+        loader.style.display = "flex";
+
+        setTimeout(() => {
+          try {
+            const sheetName = getEl("sheet-selector").value;
+            const worksheet = state.currentWorkbook.Sheets[sheetName];
+
+            const hRow = parseInt(getEl("row-header-start").value);
+            const dRow = parseInt(getEl("row-data-start").value);
+            const colS = getEl("col-start-selector").value;
+            const colE = getEl("col-end-selector").value;
+
+            // 列文字をインデックスに変換
+            const cSIndex = utils.decode_col(colS);
+            const cEIndex = utils.decode_col(colE);
+
+            // 全データ範囲を取得
+            // header行を考慮してJSON化するが、列範囲指定が難しいため
+            // 一旦 sheet_to_json で配列化してからフィルタする
+            const jsonData = utils.sheet_to_json(worksheet, {
+              header: 1, // 2次元配列として取得
+              defval: "", // 空セルは空文字
+            });
+
+            // ヘッダー行の取得 (hRowは1-based)
+            const headersRaw = jsonData[hRow - 1];
+            if (!headersRaw) throw new Error("指定されたヘッダー行が存在しません");
+
+            // 範囲内のヘッダーのみ抽出
+            const validHeaders = [];
+            for (let c = cSIndex; c <= cEIndex; c++) {
+              validHeaders.push(headersRaw[c] || `Column ${getColLabel(c)}`);
+            }
+            state.currentHeaders = validHeaders;
+
+            // データ行の抽出
+            const extractedData = [];
+            // dRowは1-based。配列indexは dRow-1
+            for (let i = dRow - 1; i < jsonData.length; i++) {
+              const rowRaw = jsonData[i];
+              if (!rowRaw) continue;
+
+              // 空行判定 (範囲内のセルがすべて空ならスキップ)
+              let isEmpty = true;
+              const rowObj = {};
+
+              for (let c = cSIndex; c <= cEIndex; c++) {
+                const val = rowRaw[c];
+                if (val !== undefined && val !== "") isEmpty = false;
+                // キーはヘッダー名ではなく、インデックスや列記号で管理したほうが重複に強いが
+                // 今回は簡易的に配列index(0-based in selection)を使う
+                rowObj[c - cSIndex] = val; // 0, 1, 2...
+              }
+
+              if (!isEmpty) extractedData.push(rowObj);
+            }
+
+            state.currentData = extractedData;
+
+            // プレビュー表示
+            renderTable(extractedData);
+
+            // タブ切り替え
+            const instance = M.Tabs.getInstance(document.querySelector(".tabs"));
+            instance.select("tab-preview");
+
+            // UI制御 (設定エリアを閉じる)
+            // 循環参照回避のため、main.jsで登録されたグローバル関数経由で呼ぶ
+            if (typeof window.toggleSetup === "function") {
+              window.toggleSetup(false);
+            }
+
+            M.toast({ html: "データを読み込みました" });
+          } catch (e) {
+            console.error(e);
+            M.toast({ html: "エラー: " + e.message });
+          } finally {
+            loader.style.display = "none";
+          }
+        }, 100);
+      }
+
+      // プレビューテーブル描画
+      function renderTable(data) {
+        const container = getEl("table-output");
+        if (!data || data.length === 0) {
+          container.innerHTML = '<div class="center grey-text" style="padding:40px;">データがありません</div>';
+          getEl("row-count").textContent = "";
           return;
         }
 
-        document.getElementById("loader").style.display = "flex";
-        const instance = M.Tabs.getInstance(document.querySelector(".tabs"));
-        instance.select("tab-preview");
-        document.getElementById("memo-area").style.display = "none";
+        getEl("row-count").textContent = `${data.length} 行`;
 
-        setTimeout(() => {
-          const config = {
-            colStart: document.getElementById("col-start-selector").value,
-            colEnd: document.getElementById("col-end-selector").value,
-            rowHeaderStart: parseInt(document.getElementById("row-header-start").value),
-            rowDataStart: parseInt(document.getElementById("row-data-start").value),
-          };
-          try {
-            const sheet = state.currentWorkbook.Sheets[sheetName];
-            // 範囲計算ロジック（簡易化）
-            let maxRowIndex = 0;
-            Object.keys(sheet).forEach((key) => {
-              if (key[0] === "!") return;
-              const decode = utils.decode_cell(key);
-              if (decode.r > maxRowIndex) maxRowIndex = decode.r;
-            });
-            const rangeStr = `${config.colStart}${config.rowHeaderStart}:${config.colEnd}${maxRowIndex + 1}`;
+        let html = '<table class="striped highlight"><thead><tr>';
+        state.currentHeaders.forEach((h) => {
+          html += `<th>${h}</th>`;
+        });
+        html += "</tr></thead><tbody>";
 
-            let rawData = utils.sheet_to_json(sheet, {
-              header: 1,
-              range: rangeStr,
-              defval: "",
-              raw: false, // 【重要】生データではなく、フォーマットされた文字列を取得する
-              dateNF: "yyyy/mm/dd", // 書式設定がない日付セルのデフォルトフォーマットを指定
-            });
-            const filteredData = rawData.filter((row) => row.some((cell) => String(cell).trim() !== ""));
-
-            let headerCount = config.rowDataStart - config.rowHeaderStart;
-            if (headerCount < 0) headerCount = 0;
-
-            state.currentHeaders = filteredData.slice(0, headerCount);
-            state.currentData = filteredData.slice(headerCount);
-
-            renderTable();
-            document.getElementById("row-count").textContent = `(有効データ: ${state.currentData.length}件)`;
-          } catch (err) {
-            alert("失敗: " + err.message);
-          } finally {
-            document.getElementById("loader").style.display = "none";
+        // 最大100行までプレビュー
+        const limit = Math.min(data.length, 100);
+        for (let i = 0; i < limit; i++) {
+          html += "<tr>";
+          const row = data[i];
+          // rowは {0: val, 1: val...}
+          for (let j = 0; j < state.currentHeaders.length; j++) {
+            html += `<td>${row[j] !== undefined ? row[j] : ""}</td>`;
           }
-        }, 50);
+          html += "</tr>";
+        }
+        html += "</tbody></table>";
+
+        if (data.length > 100) {
+          html += `<div class="center" style="padding:8px; font-size:0.8rem; color:#888;">他 ${data.length - 100} 行は省略されました</div>`;
+        }
+
+        container.innerHTML = html;
       }
 
-      function renderTable() {
-        let html = '<table class="striped"><thead>';
-        state.currentHeaders.forEach((row) => {
-          html += "<tr>" + row.map((cell) => `<th>${cell}</th>`).join("") + "</tr>";
-        });
-        html += "</thead><tbody>";
-        state.currentData.slice(0, 100).forEach((row) => {
-          html += "<tr>" + row.map((cell) => `<td>${cell}</td>`).join("") + "</tr>";
-        });
-        html += "</tbody></table>";
-        document.getElementById("table-output").innerHTML = html;
+      // プレビューフィルタ適用
+      function applyPreviewFilter() {
+        if (!state.currentData || state.currentData.length === 0) return;
 
-        const select = document.getElementById("filter-col-index");
-        select.innerHTML = "";
-        const displayHeaders = state.currentHeaders[state.currentHeaders.length - 1] || [];
-        displayHeaders.forEach((h, i) => {
-          select.add(new Option(h || `列 ${i + 1}`, i));
+        const col1 = getEl("preview-filter-col-1").value;
+        const val1 = getEl("preview-filter-val-1").value;
+        const col2 = getEl("preview-filter-col-2").value;
+        const val2 = getEl("preview-filter-val-2").value;
+        const col3 = getEl("preview-filter-col-3").value;
+        const val3 = getEl("preview-filter-val-3").value;
+
+        if (!col1 && !col2 && !col3) {
+          renderTable(state.currentData);
+          return;
+        }
+
+        // 列文字(A,B...)を抽出データ内のインデックス(0,1...)に変換する必要がある
+        // state.currentData は {0: val, 1: val} (0は開始列)
+        // 一方、フィルタのcolは "A", "B"...
+        // なので、「開始列」からの相対位置を計算する
+
+        const startColChar = getEl("col-start-selector").value || "A";
+        const startColIndex = utils.decode_col(startColChar);
+
+        const getRelativeIndex = (colChar) => {
+          if (!colChar) return -1;
+          const idx = utils.decode_col(colChar);
+          return idx - startColIndex;
+        };
+
+        const idx1 = getRelativeIndex(col1);
+        const idx2 = getRelativeIndex(col2);
+        const idx3 = getRelativeIndex(col3);
+
+        const filtered = state.currentData.filter((row) => {
+          let match = true;
+          if (idx1 >= 0 && val1) {
+            // 完全一致とするか部分一致とするか。要件では「値 (完全一致)」とplaceholderにある
+            if (String(row[idx1]) !== val1) match = false;
+          }
+          if (match && idx2 >= 0 && val2) {
+            // 条件2はplaceholder「値」なので部分一致にする？統一のため完全一致にします
+            if (String(row[idx2]) !== val2) match = false;
+          }
+          if (match && idx3 >= 0 && val3) {
+            if (String(row[idx3]) !== val3) match = false;
+          }
+          return match;
         });
+
+        renderTable(filtered);
+        M.toast({ html: `絞り込み結果: ${filtered.length} 行` });
+      }
+
+      function clearPreviewFilter() {
+        getEl("preview-filter-col-1").value = "";
+        getEl("preview-filter-val-1").value = "";
+        getEl("preview-filter-col-2").value = "";
+        getEl("preview-filter-val-2").value = "";
+        getEl("preview-filter-col-3").value = "";
+        getEl("preview-filter-val-3").value = "";
+        renderTable(state.currentData);
       }
 
       // Materializeの初期化とイベントリスナー設定
@@ -25326,10 +25476,6 @@ type MJRObject = {
         loadSettings();
         renderMemos();
         initDragAndDrop();
-
-        // タブの初期化を確実に行う
-        const tabs = document.querySelectorAll(".tabs");
-        M.Tabs.init(tabs);
 
         // 改行コードを含むプレースホルダーを設定
         const suffixArea = document.getElementById("md-suffix");
@@ -25430,20 +25576,24 @@ type MJRObject = {
 
           // --- UIリセット (表示エリア) ---
 
-          // タブを「データプレビュー」に戻しておく
+          // タブを「保存済みメモ」に戻しておく
           const activeTab = clone.querySelector(".tabs .tab a.active");
           if (activeTab) activeTab.classList.remove("active");
-          const firstTab = clone.querySelector(".tabs .tab:first-child a");
-          if (firstTab) firstTab.classList.add("active");
+
+          // index.htmlの並び順変更に伴い first-child はメモになりますが、
+          // 安全のためID指定でアクティブ化します
+          const memoTab = clone.querySelector("a[href='#tab-memos']");
+          if (memoTab) memoTab.classList.add("active");
 
           // コンテンツエリアの表示制御 (Materializeのタブはdisplay:noneで制御される)
           const tabPreview = clone.querySelector("#tab-preview");
           const tabMarkdown = clone.querySelector("#tab-markdown");
           const tabMemos = clone.querySelector("#tab-memos");
 
-          if (tabPreview) tabPreview.style.display = "block";
+          // メモタブを表示状態にする
+          if (tabPreview) tabPreview.style.display = "none";
           if (tabMarkdown) tabMarkdown.style.display = "none";
-          if (tabMemos) tabMemos.style.display = "none";
+          if (tabMemos) tabMemos.style.display = "block";
 
           clone.querySelector("#table-output").innerHTML =
             '<div class="center grey-text" style="padding:100px;">初期状態です</div>';
@@ -25452,7 +25602,14 @@ type MJRObject = {
           // --- 入力値のリセット ---
 
           // 1. テキスト入力・数値入力のリセット
-          const inputsToClear = ["full-path-memo", "new-memo-name", "filter-value"];
+          const inputsToClear = [
+            "full-path-memo",
+            "new-memo-name",
+            // "filter-value", // 削除
+            "preview-filter-val-1",
+            "preview-filter-val-2",
+            "preview-filter-val-3",
+          ];
           inputsToClear.forEach((id) => {
             const el = clone.querySelector("#" + id);
             if (el) el.setAttribute("value", ""); // 空文字を設定
@@ -25479,7 +25636,14 @@ type MJRObject = {
           }
 
           // その他プルダウンを空にする
-          const emptySelects = ["col-start-selector", "col-end-selector", "filter-col-index"];
+          const emptySelects = [
+            "col-start-selector",
+            "col-end-selector",
+            // "filter-col-index", // 削除
+            "preview-filter-col-1",
+            "preview-filter-col-2",
+            "preview-filter-col-3",
+          ];
           emptySelects.forEach((id) => {
             const el = clone.querySelector("#" + id);
             if (el) el.innerHTML = "";
@@ -25526,62 +25690,102 @@ type MJRObject = {
         }
       }
 
+      function toggleSetupArea(show) {
+        const setupArea = document.getElementById("setup-area");
+        const reopenArea = document.getElementById("reopen-area");
+
+        if (!setupArea || !reopenArea) return;
+
+        if (show) {
+          setupArea.style.display = "block";
+          reopenArea.style.display = "none";
+        } else {
+          setupArea.style.display = "none";
+          reopenArea.style.display = "block";
+        }
+      }
+
+      /**
+       * プレビュー絞り込み条件に基づいてMarkdownを生成する
+       */
       function generateMarkdown() {
-        const colIdx = document.getElementById("filter-col-index").value;
-        const val = document.getElementById("filter-value").value;
+        // 0. 列文字をインデックス数値に変換するためのヘルパー（utilsのdecode_colを利用）
+        // 内部データが開始列を0としているため、相対位置を計算する必要がある
+        const decodeCol = (colStr) => {
+          let d = 0;
+          for (let i = 0; i !== colStr.length; ++i) d = 26 * d + colStr.charCodeAt(i) - 64;
+          return d - 1;
+        };
+
+        const startColChar = document.getElementById("col-start-selector").value || "A";
+        const startColIndex = decodeCol(startColChar);
+
+        // 1. プレビュー絞り込み条件（1～3）を取得して相対インデックスに変換
+        const filters = [];
+        for (let i = 1; i <= 3; i++) {
+          const colSelect = document.getElementById(`preview-filter-col-${i}`);
+          const valInput = document.getElementById(`preview-filter-val-${i}`);
+
+          if (colSelect && colSelect.value !== "") {
+            // 選択された列文字（"C"等）から開始列を引いて、データのインデックスと合わせる
+            const absIndex = decodeCol(colSelect.value);
+            const relIndex = absIndex - startColIndex;
+
+            filters.push({
+              colIndex: relIndex,
+              val: valInput.value.trim(),
+            });
+          }
+        }
+
         const prefix = document.getElementById("md-prefix").value;
         const suffix = document.getElementById("md-suffix").value;
 
         let md = "";
 
-        // フィルタリングに一致する行を処理
+        // 2. データ行のループ処理
         state.currentData.forEach((row) => {
-          // データは文字列として比較
-          if (String(row[colIdx]).trim() === val.trim()) {
-            // 各列（カラム）ごとに処理を行う
-            row.forEach((cellValue, colIndex) => {
-              let columnBuffer = ""; // この列の出力バッファ
+          // 3. 全ての有効なフィルタ条件に一致するか判定 (AND条件)
+          const isMatch = filters.every((f) => {
+            const cellData = row[f.colIndex];
+            // 文字列として比較
+            return String(cellData !== undefined ? cellData : "").trim() === f.val;
+          });
 
-              // 1. ヘッダー行の出力
-              state.currentHeaders.forEach((hRow, hIdx) => {
-                let hName = hRow[colIndex]; // letに変更して再代入可能にする
+          if (isMatch) {
+            // 各列（カラム）ごとにMarkdownテキストを構築
+            state.currentHeaders.forEach((hNameRaw, colIndex) => {
+              let columnBuffer = "";
+              const cellValue = row[colIndex];
 
-                if (hName && String(hName).trim() !== "") {
-                  // 改行コード(\r, \n)を全て削除する
-                  hName = String(hName).replace(/[\r\n]+/g, "");
+              // ヘッダー（# 項目名）の処理
+              if (hNameRaw && String(hNameRaw).trim() !== "") {
+                const hName = String(hNameRaw).replace(/[\r\n]+/g, "");
+                columnBuffer += `# ${hName}\n`;
+              }
 
-                  const prefixMd = "#".repeat(hIdx + 1);
-                  columnBuffer += `${prefixMd} ${hName}\n`;
-                }
-              });
-
-              // 2. データ値の出力
-              // 値がある、またはヘッダーが表示されている場合は値エリアを表示する意図があれば出力
-              // ※要件「セルA3のデータを出力」に従い、値があれば出力します
+              // 値の処理（改行を<br>に変換）
               if (cellValue !== undefined && String(cellValue).trim() !== "") {
-                let text = String(cellValue)
-                  // すべての改行コード(\r\n, \r, \n)を統一的に <br> のみに置換
-                  // 要件変更: 改行コードを含めず <br> タグのみとすることで、Markdownテーブル内での表示崩れを防ぎます
+                const text = String(cellValue)
                   .replace(/(\r\n|\n|\r)/g, "<br>")
                   .trim();
                 columnBuffer += `${text}\n`;
               }
 
-              // 何らかの出力要素（ヘッダーまたは値）があればMarkdownに追加
-              // さらに列間の区切りとして改行を追加
               if (columnBuffer.length > 0) {
                 md += columnBuffer + "\n";
               }
             });
 
-            // レコード区切り
+            // レコード区切り線
             md += "---\n\n";
           }
         });
 
-        // 末尾の区切り線除去
+        // 末尾の余分な区切り線を削除
         md = md.replace(/---\n\n$/, "");
 
+        // 4. 前後テキストを結合して最終出力
         let finalOutput = "";
         if (prefix) finalOutput += prefix + "\n\n";
         finalOutput += md || "該当データなし\n";
@@ -25589,16 +25793,52 @@ type MJRObject = {
 
         document.getElementById("markdown-output").textContent = finalOutput;
 
+        // Markdown結果タブへ自動遷移
         const instance = M.Tabs.getInstance(document.querySelector(".tabs"));
         instance.select("tab-markdown");
       }
 
+      /**
+       * 生成されたMarkdownをクリップボードにコピー
+       */
       function copyMarkdown() {
         const text = document.getElementById("markdown-output").textContent;
         navigator.clipboard.writeText(text).then(() => M.toast({ html: "コピーしました" }));
       }
 
       const logs = [
+        {
+          version: "1.7.0",
+          desc: "機能統合とUI改善<br>・「変換設定」の絞り込みロジックを「プレビュー絞り込み」と統合し、表示されている内容がそのまま出力されるよう改善<br>・詳細設定（前後テキスト付加）を常時表示に変更し、アクセシビリティを向上",
+        },
+        {
+          version: "1.6.0",
+          desc: "UI改善 (作業フローの最適化)<br>・データ読み込み完了時に設定エリア（データソース・読み込み設定）を自動的に折りたたむ機能を追加<br>・設定を再変更するための「設定を再表示」ボタンを追加",
+        },
+        {
+          version: "1.5.0",
+          desc: "プレビュー機能の拡張<br>・データの絞り込み条件を3つまで指定できるように変更（AND条件）",
+        },
+        {
+          version: "1.4.1",
+          desc: "UI挙動の改善と不具合修正<br>・解析実行時のタブ遷移でURL（ハッシュ）を変更しないように改良<br>・タブ切り替え時にインジケーター（下線）が正しく移動しない問題を修正",
+        },
+        {
+          version: "1.4.0",
+          desc: "プレビュー機能の強化<br>・データプレビューに対する絞り込み（フィルタリング）機能を追加<br>・読み込み結果の件数表示を改善（表示件数/全件数）",
+        },
+        {
+          version: "1.3.0",
+          desc: "UI改善 (タブ配置の最適化)<br>・右側カラムのタブ順序を変更 (メモ → プレビュー → Markdown)<br>・初期表示タブを「保存済みメモ」に変更<br>・設定保存ファイル(HTML)を開いた際の初期表示修正",
+        },
+        {
+          version: "1.2.0",
+          desc: "UIレイアウトの改善 (操作フローの最適化)<br>・「解析・表示」ボタンを読み込み設定直下に移動<br>・「詳細設定」を変換設定エリアに移動<br>・各ボタン配置の見直し",
+        },
+        {
+          version: "1.1.1",
+          desc: "Excel解析時に処理が中断され、完了しない不具合を修正",
+        },
         {
           version: "1.1.0",
           desc: "UIレイアウトを刷新<br>・設定/操作を左側、結果/履歴を右側に集約<br>・Markdown設定項目の移動<br>・右側カラムのタブ化 (プレビュー/Markdown/メモ)<br>・保存済みメモ表示エリアの統合",
@@ -25646,6 +25886,9 @@ type MJRObject = {
       window.openUsageModal = openUsageModal;
       window.openLogModal = openLogModal;
       window.downloadCurrentHTML = downloadCurrentHTML;
+      window.applyPreviewFilter = applyPreviewFilter;
+      window.clearPreviewFilter = clearPreviewFilter;
+      window.toggleSetup = toggleSetupArea;
       window.handleMemoSave = () => {
         const name = document.getElementById("new-memo-name").value.trim();
         if (!name) {
@@ -25717,9 +25960,6 @@ type MJRObject = {
         document.getElementById("md-suffix").value = m.mdSuffix || "";
         document.getElementById("md-prefix").dispatchEvent(new Event("input"));
         document.getElementById("md-suffix").dispatchEvent(new Event("input"));
-        if (m.mdPrefix || m.mdSuffix) {
-          M.Collapsible.getInstance(document.querySelector(".collapsible")).open(0);
-        }
         if (state.currentWorkbook) {
           const selector = document.getElementById("sheet-selector");
           let found = false;
@@ -25746,10 +25986,10 @@ type MJRObject = {
       };
       document.addEventListener("DOMContentLoaded", () => {
         try {
-          document.getElementById("app-version").textContent = `v${"1.1.0"}`;
+          document.getElementById("app-version").textContent = `v${"1.7.0"}`;
         } catch (e) {
           console.log("Dev mode: Version not injected");
         }
         initUI();
         renderChangeLog();
-      });</script><style rel="stylesheet" crossorigin>@import url(https://cdnjs.cloudflare.com/ajax/libs/materialize/1.0.0/css/materialize.min.css);:root{--md-sys-color-primary:#005ac1;--md-sys-color-on-primary:#ffffff;--md-sys-color-primary-container:#d8e2ff;--md-sys-color-on-primary-container:#001a41;--md-sys-color-secondary:#575e71;--md-sys-color-secondary-container:#dce2f9;--md-sys-color-on-secondary-container:#141b2c;--md-sys-color-tertiary:#715573;--md-sys-color-tertiary-container:#fbd7fc;--md-sys-color-on-tertiary-container:#29132d;--md-sys-color-error:#ba1a1a;--md-sys-color-background:#fefbff;--md-sys-color-surface:#fefbff;--md-sys-color-surface-container:#f0f4fa;--md-sys-color-surface-container-high:#eaeff5;--md-sys-color-outline:#74777f;--md-sys-color-outline-variant:#c4c6d0;--md-sys-color-on-surface:#1b1b1f;--md-sys-color-on-surface-variant:#44474f;--shape-corner-extra-small:4px;--shape-corner-small:8px;--shape-corner-medium:12px;--shape-corner-large:16px;--shape-corner-full:9999px}body{background-color:var(--md-sys-color-background);font-family:Roboto,"Noto Sans JP",sans-serif;color:var(--md-sys-color-on-surface);line-height:1.5}.container{margin-top:16px;margin-bottom:80px;width:94%;max-width:1440px}nav{background-color:var(--md-sys-color-surface)!important;color:var(--md-sys-color-on-surface)!important;box-shadow:none!important;height:64px;line-height:64px;border-bottom:1px solid var(--md-sys-color-outline-variant)}.brand-logo{font-size:1.375rem;font-weight:400;color:var(--md-sys-color-on-surface)!important;display:flex;align-items:center;padding-left:16px;height:100%}.brand-logo i{color:var(--md-sys-color-primary);margin-right:12px;font-size:24px;display:inline-flex;align-items:center;height:100%}nav ul a{color:var(--md-sys-color-on-surface)!important}nav ul a:hover{background-color:rgba(0,0,0,.05)!important}.card-panel{border-radius:var(--shape-corner-medium);box-shadow:0 1px 2px rgba(0,0,0,.3),0 1px 3px 1px rgba(0,0,0,.15);border:none;padding:24px;background:#fff;margin-bottom:24px;transition:box-shadow .2s ease}.card-panel:hover{box-shadow:0 1px 2px rgba(0,0,0,.3),0 2px 6px 2px rgba(0,0,0,.15)}.section-header{font-size:1.25rem;font-weight:500;color:var(--md-sys-color-on-surface);margin-bottom:24px;display:flex;align-items:center}.section-header i{margin-right:12px;color:var(--md-sys-color-primary)}.input-group{margin-bottom:24px;position:relative}.input-label{font-size:.75rem;font-weight:500;color:var(--md-sys-color-on-surface-variant);margin-bottom:4px;display:block;letter-spacing:.5px}input[type=number]:not(.browser-default),input[type=text]:not(.browser-default),textarea.styled-textarea{border:1px solid var(--md-sys-color-outline)!important;border-radius:var(--shape-corner-extra-small)!important;padding:0 16px!important;box-sizing:border-box!important;background-color:transparent!important;width:100%;font-size:1rem;height:56px!important;box-shadow:none!important;color:var(--md-sys-color-on-surface);outline:0!important;transition:border-color .2s}select.browser-default{background-color:transparent;border:1px solid var(--md-sys-color-outline);border-radius:var(--shape-corner-extra-small);height:56px;padding:0 16px;width:100%;font-size:1rem;color:var(--md-sys-color-on-surface);display:block!important;outline:0;cursor:pointer;appearance:none;background-image:url("data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2224%22%20height%3D%2224%22%20viewBox%3D%220%200%2024%2024%22%3E%3Cpath%20fill%3D%22%2374777F%22%20d%3D%22M7%2010l5%205%205-5z%22%2F%3E%3C%2Fsvg%3E");background-repeat:no-repeat;background-position:right 16px center}input:focus,select.browser-default:focus,textarea:focus{border-color:var(--md-sys-color-primary)!important;border-width:2px!important}textarea.styled-textarea{height:auto!important;min-height:100px;padding:16px!important;resize:vertical;line-height:1.5}.drop-zone{border:1px dashed var(--md-sys-color-outline);padding:40px 20px;text-align:center;background:var(--md-sys-color-surface-container);cursor:pointer;border-radius:var(--shape-corner-medium);margin-bottom:24px;transition:background-color .2s}.drop-zone:hover{border-color:var(--md-sys-color-primary);background-color:var(--md-sys-color-primary-container)}.drop-text{font-weight:500;color:var(--md-sys-color-on-surface);margin-top:16px;font-size:1rem}.btn-filled{background-color:var(--md-sys-color-primary)!important;color:var(--md-sys-color-on-primary)!important;width:100%;height:48px;border-radius:var(--shape-corner-full);font-weight:500;text-transform:none;box-shadow:none;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;letter-spacing:.1px;transition:background-color .2s,box-shadow .2s}.btn-filled:hover{opacity:.9;box-shadow:0 1px 2px rgba(0,0,0,.3),0 1px 3px 1px rgba(0,0,0,.15)}.btn-filled:disabled{background-color:rgba(29,27,32,.12)!important;color:rgba(29,27,32,.38)!important;box-shadow:none;cursor:not-allowed}.btn-tonal{background-color:var(--md-sys-color-secondary-container);color:var(--md-sys-color-on-secondary-container);border-radius:var(--shape-corner-full);height:40px;padding:0 24px;border:none;font-weight:500;display:inline-flex;align-items:center;justify-content:center;gap:8px;cursor:pointer;transition:background-color .2s}.btn-tonal:hover{opacity:.8;box-shadow:0 1px 2px rgba(0,0,0,.3)}.btn-text{background:0 0;color:var(--md-sys-color-primary);border:none;font-weight:500;cursor:pointer;padding:0 12px;height:40px;border-radius:var(--shape-corner-full);display:inline-flex;align-items:center;justify-content:center;gap:8px}.btn-text:hover{background-color:rgba(0,90,193,.08)}.save-area{background-color:var(--md-sys-color-primary-container);color:var(--md-sys-color-on-primary-container);padding:16px 24px;border-radius:var(--shape-corner-medium);margin-top:32px}.save-area-header{font-weight:700;margin-bottom:12px;display:flex;align-items:center;font-size:.9rem}.save-area-row{display:flex;align-items:center;gap:12px}.save-area input{flex-grow:1;min-width:0;border:none!important;background:rgba(255,255,255,.7)!important;margin:0!important;border-radius:var(--shape-corner-full)!important;height:40px!important;padding:0 16px!important}.save-area input:focus{background:#fff!important}.tabs{background:0 0;margin-bottom:24px;border-bottom:1px solid var(--md-sys-color-outline-variant)}.tabs .tab a{color:var(--md-sys-color-on-surface-variant);font-weight:500;text-transform:none;font-size:.95rem}.tabs .tab a.active,.tabs .tab a:hover{color:var(--md-sys-color-primary);background-color:transparent}.tabs .indicator{background-color:var(--md-sys-color-primary);height:3px;border-top-left-radius:3px;border-top-right-radius:3px}.editor-container{border:1px solid var(--md-sys-color-outline-variant);border-radius:var(--shape-corner-medium);background:var(--md-sys-color-surface);overflow:hidden}.editor-footer,.editor-header{padding:12px 24px;background-color:var(--md-sys-color-surface-container);border-bottom:1px solid var(--md-sys-color-outline-variant);font-size:.75rem;color:var(--md-sys-color-on-surface-variant);font-weight:500;text-transform:uppercase;letter-spacing:.5px}.editor-footer{border-top:1px solid var(--md-sys-color-outline-variant);border-bottom:none}#display-prefix,#display-suffix{padding:16px 24px;font-family:monospace;color:var(--md-sys-color-on-surface);background:var(--md-sys-color-surface);white-space:pre-wrap;font-size:.9rem}#markdown-output{background-color:#1a1c1e;color:#e3e2e6;padding:24px;min-height:250px;white-space:pre-wrap;font-family:Consolas,monospace;line-height:1.6;font-size:.95rem}#memo-area{display:none;margin-bottom:24px;animation:fadeIn .3s ease-out}@keyframes fadeIn{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:translateY(0)}}.memo-list-container{max-height:350px;overflow-y:auto;border:1px solid var(--md-sys-color-outline-variant);border-radius:var(--shape-corner-medium);background:var(--md-sys-color-surface)}.memo-item{padding:16px 24px;border-bottom:1px solid var(--md-sys-color-outline-variant);display:flex;justify-content:space-between;align-items:center;transition:background .2s}.memo-item:last-child{border-bottom:none}.memo-item:hover{background-color:var(--md-sys-color-surface-container-high)}.memo-item.editing-mode{background-color:var(--md-sys-color-secondary-container)}.memo-info{flex:1;min-width:0;margin-right:16px}.memo-name{font-weight:500;color:var(--md-sys-color-on-surface);font-size:1rem}.memo-meta{font-size:.85rem;color:var(--md-sys-color-on-surface-variant);margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.memo-path{font-size:.8rem;color:var(--md-sys-color-on-surface-variant);opacity:.8;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:flex;align-items:center}.memo-path i{font-size:14px;margin-right:4px}.memo-actions{display:flex;gap:8px;flex-shrink:0}.hidden{display:none!important}.divider-custom{border:0;border-top:1px solid var(--md-sys-color-outline-variant);margin:32px 0}.flash-highlight{animation:highlight 1.5s ease-out forwards}@keyframes highlight{0%{background-color:var(--md-sys-color-tertiary-container)}100%{background-color:transparent}}.modal{max-height:80%;border-radius:var(--shape-corner-medium)}.modal .modal-footer{border-top:1px solid var(--md-sys-color-outline-variant)}.modal-overlay{z-index:999!important}</style></head><body><div id="loader" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(255,255,255,.9);z-index:9999;justify-content:center;align-items:center"><div class="preloader-wrapper big active"><div class="spinner-layer spinner-blue-only" style="border-color:#005ac1"><div class="circle-clipper left"><div class="circle"></div></div><div class="gap-patch"><div class="circle"></div></div><div class="circle-clipper right"><div class="circle"></div></div></div></div></div><nav><div class="nav-wrapper container"><a href="#" class="brand-logo"><i class="material-icons">grid_view</i> Excel to Markdown Tool <span id="app-version" style="font-size:.8rem;margin-left:10px;opacity:.7"></span></a><ul class="right"><li><a href="#" onclick="window.openUsageModal()" title="使い方ガイド"><i class="material-icons">help_outline</i></a></li><li><a href="#" onclick="window.openLogModal()" title="変更履歴"><i class="material-icons">history</i></a></li></ul></div></nav><div class="container"><div class="row"><div class="col s12 l4"><div class="card-panel"><div class="section-header"><i class="material-icons">folder_open</i>データソース</div><div id="drop-zone" class="drop-zone"><i class="material-icons" style="font-size:48px;color:var(--md-sys-color-primary);margin-bottom:8px">cloud_upload</i><div class="drop-text" id="file-status">ここにExcelをドロップ</div><input type="file" id="excel-file" accept=".xlsx, .xls" style="display:none"></div><div class="input-group"><label class="input-label">サーバーパス (メモ用)</label> <input id="full-path-memo" type="text" placeholder="\\Server\Share\File.xlsx"></div><div class="divider-custom"></div><div class="section-header"><i class="material-icons">tune</i>読み込み設定</div><div class="input-group"><label class="input-label">対象シート</label> <select id="sheet-selector" class="browser-default"><option value="" disabled="disabled" selected="selected">ファイル未選択</option></select></div><div class="row"><div class="col s6"><label class="input-label">ヘッダー行</label><input id="row-header-start" type="number" value="1" min="1"></div><div class="col s6"><label class="input-label">データ開始行</label><input id="row-data-start" type="number" value="2" min="1"></div></div><div class="row"><div class="col s6"><label class="input-label">開始列</label><select id="col-start-selector" class="browser-default"></select></div><div class="col s6"><label class="input-label">終了列</label><select id="col-end-selector" class="browser-default"></select></div></div><ul class="collapsible z-depth-0" style="border:1px solid var(--md-sys-color-outline-variant);border-radius:var(--shape-corner-small);background-color:transparent"><li><div class="collapsible-header" style="background:0 0;border:none;padding:16px;font-size:.9rem;color:var(--md-sys-color-on-surface-variant)"><i class="material-icons" style="color:var(--md-sys-color-outline)">expand_more</i>詳細設定 (前後テキスト付加)</div><div class="collapsible-body" style="background:var(--md-sys-color-surface);border-top:1px solid var(--md-sys-color-outline-variant);padding:20px"><div class="input-group"><label class="input-label">ヘッダー (前付加)</label><textarea id="md-prefix" class="styled-textarea" placeholder="# タイトル..."></textarea></div><div class="input-group" style="margin-bottom:0"><label class="input-label">フッター (後付加)</label><textarea id="md-suffix" class="styled-textarea" placeholder="--- 注釈..."></textarea></div></div></li></ul><div class="divider-custom"></div><div class="section-header"><i class="material-icons">transform</i>変換設定</div><div class="input-group"><label class="input-label">条件列 (絞り込み)</label> <select id="filter-col-index" class="browser-default"></select></div><div class="input-group"><label class="input-label">抽出値 (完全一致)</label> <input id="filter-value" type="text" placeholder="例: 未完了"></div><div class="row" style="margin-top:24px"><div class="col s6"><button id="btn-process" class="btn-filled waves-effect waves-light" disabled="disabled" onclick="window.processExcel()"><i class="material-icons">play_arrow</i><span>解析・表示</span></button></div><div class="col s6"><button class="btn-tonal" style="width:100%;height:48px;background-color:var(--md-sys-color-secondary);color:#fff" onclick="window.generateMarkdown()"><i class="material-icons">transform</i><span>変換実行</span></button></div></div><div class="save-area" id="save-area"><div class="save-area-header"><i class="material-icons tiny" style="margin-right:8px">bookmark</i>設定をメモ保存</div><div class="save-area-row"><input id="new-memo-name" type="text" placeholder="メモタイトル"> <button id="btn-save-memo" class="btn-tonal" style="width:auto;height:40px;padding:0 24px;font-size:.9rem" onclick="window.handleMemoSave()">保存</button> <button id="btn-cancel-edit" class="btn-text hidden" style="width:auto" onclick="window.cancelEdit()">中止</button></div></div><div class="center-align" style="margin-top:24px"><button onclick="window.downloadCurrentHTML()" class="btn-text" style="text-transform:none;font-size:.85rem"><i class="material-icons tiny" style="margin-right:6px">save_alt</i>設定とメモのみHTML保存</button></div></div></div><div class="col s12 l8"><ul class="tabs"><li class="tab col s4"><a class="active" href="#tab-preview">データプレビュー</a></li><li class="tab col s4"><a href="#tab-markdown">Markdown結果</a></li><li class="tab col s4"><a href="#tab-memos">保存済みメモ</a></li></ul><div id="tab-preview" class="col s12"><div class="card-panel"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px"><span class="section-header" style="margin:0;font-size:1.1rem"><i class="material-icons">table_chart</i>読み込み結果</span> <span id="row-count" style="font-size:.9rem;color:var(--md-sys-color-on-surface-variant)"></span></div><div id="table-output" style="overflow:auto;max-height:500px;border:1px solid var(--md-sys-color-outline-variant);border-radius:var(--shape-corner-extra-small)"><div class="center" style="padding:100px;color:var(--md-sys-color-outline)">左側の「解析・表示」ボタンを押してください</div></div></div></div><div id="tab-markdown" class="col s12"><div class="card-panel"><div class="editor-container"><div class="editor-header">Header (前付加テキスト)</div><div id="display-prefix"></div><div class="editor-header" style="background:#1a1c1e;color:#ccc;border-color:#333">Generated Markdown (本文)</div><div id="markdown-output">（変換を実行するとここに表示されます）</div><div class="editor-header">Footer (後付加テキスト)</div><div id="display-suffix"></div></div><div style="text-align:right;margin-top:24px"><button class="btn-filled" style="width:auto;padding:0 32px;background-color:var(--md-sys-color-error)!important" onclick="window.copyMarkdown()"><i class="material-icons">content_copy</i><span>全て結合してコピー</span></button></div></div></div><div id="tab-memos" class="col s12"><div class="card-panel" style="padding:0;overflow:hidden"><div style="padding:16px 24px;background:var(--md-sys-color-surface-container);border-bottom:1px solid var(--md-sys-color-outline-variant);font-weight:500;font-size:1rem">保存した設定メモ一覧</div><div id="memo-list" class="memo-list-container" style="border:none;border-radius:0;max-height:600px"><div class="center grey-text" style="padding:40px">メモはありません</div></div></div></div></div></div></div><div id="modal-changelog" class="modal"><div class="modal-content"><h4>変更履歴</h4><ul class="collection" id="changelog-list"></ul></div><div class="modal-footer"><a href="#!" class="modal-close waves-effect waves-green btn-flat">閉じる</a></div></div><div id="modal-usage" class="modal"><div class="modal-content"><h4>使い方ガイド</h4><div id="usage-content"><ol><li>Excelファイルを画面左上のエリアにドラッグ&ドロップします。</li><li>「対象シート」を選択し、読み込む行・列の範囲を指定します。</li><li>「解析・表示」ボタンを押して、右側でデータをプレビューします。</li><li>必要に応じてMarkdown変換条件（列と値）を指定し、「変換実行」を押します。</li><li>「全て結合してコピー」でクリップボードに取得できます。</li></ol></div></div><div class="modal-footer"><a href="#!" class="modal-close waves-effect waves-green btn-flat">閉じる</a></div></div><script src="https://cdnjs.cloudflare.com/ajax/libs/materialize/1.0.0/js/materialize.min.js"></script></body></html>
+      });</script><style rel="stylesheet" crossorigin>@import url(https://cdnjs.cloudflare.com/ajax/libs/materialize/1.0.0/css/materialize.min.css);:root{--md-sys-color-primary:#005ac1;--md-sys-color-on-primary:#ffffff;--md-sys-color-primary-container:#d8e2ff;--md-sys-color-on-primary-container:#001a41;--md-sys-color-secondary:#575e71;--md-sys-color-secondary-container:#dce2f9;--md-sys-color-on-secondary-container:#141b2c;--md-sys-color-tertiary:#715573;--md-sys-color-tertiary-container:#fbd7fc;--md-sys-color-on-tertiary-container:#29132d;--md-sys-color-error:#ba1a1a;--md-sys-color-background:#fefbff;--md-sys-color-surface:#fefbff;--md-sys-color-surface-container:#f0f4fa;--md-sys-color-surface-container-high:#eaeff5;--md-sys-color-outline:#74777f;--md-sys-color-outline-variant:#c4c6d0;--md-sys-color-on-surface:#1b1b1f;--md-sys-color-on-surface-variant:#44474f;--shape-corner-extra-small:4px;--shape-corner-small:8px;--shape-corner-medium:12px;--shape-corner-large:16px;--shape-corner-full:9999px}body{background-color:var(--md-sys-color-background);font-family:Roboto,"Noto Sans JP",sans-serif;color:var(--md-sys-color-on-surface);line-height:1.5}.container{margin-top:16px;margin-bottom:80px;width:94%;max-width:1440px}nav{background-color:var(--md-sys-color-surface)!important;color:var(--md-sys-color-on-surface)!important;box-shadow:none!important;height:64px;line-height:64px;border-bottom:1px solid var(--md-sys-color-outline-variant)}.brand-logo{font-size:1.375rem;font-weight:400;color:var(--md-sys-color-on-surface)!important;display:flex;align-items:center;padding-left:16px;height:100%}.brand-logo i{color:var(--md-sys-color-primary);margin-right:12px;font-size:24px;display:inline-flex;align-items:center;height:100%}nav ul a{color:var(--md-sys-color-on-surface)!important}nav ul a:hover{background-color:rgba(0,0,0,.05)!important}.card-panel{border-radius:var(--shape-corner-medium);box-shadow:0 1px 2px rgba(0,0,0,.3),0 1px 3px 1px rgba(0,0,0,.15);border:none;padding:24px;background:#fff;margin-bottom:24px;transition:box-shadow .2s ease}.card-panel:hover{box-shadow:0 1px 2px rgba(0,0,0,.3),0 2px 6px 2px rgba(0,0,0,.15)}.section-header{font-size:1.25rem;font-weight:500;color:var(--md-sys-color-on-surface);margin-bottom:24px;display:flex;align-items:center}.section-header i{margin-right:12px;color:var(--md-sys-color-primary)}.input-group{margin-bottom:24px;position:relative}.input-label{font-size:.75rem;font-weight:500;color:var(--md-sys-color-on-surface-variant);margin-bottom:4px;display:block;letter-spacing:.5px}input[type=number]:not(.browser-default),input[type=text]:not(.browser-default),textarea.styled-textarea{border:1px solid var(--md-sys-color-outline)!important;border-radius:var(--shape-corner-extra-small)!important;padding:0 16px!important;box-sizing:border-box!important;background-color:transparent!important;width:100%;font-size:1rem;height:56px!important;box-shadow:none!important;color:var(--md-sys-color-on-surface);outline:0!important;transition:border-color .2s}select.browser-default{background-color:transparent;border:1px solid var(--md-sys-color-outline);border-radius:var(--shape-corner-extra-small);height:56px;padding:0 16px;width:100%;font-size:1rem;color:var(--md-sys-color-on-surface);display:block!important;outline:0;cursor:pointer;appearance:none;background-image:url("data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2224%22%20height%3D%2224%22%20viewBox%3D%220%200%2024%2024%22%3E%3Cpath%20fill%3D%22%2374777F%22%20d%3D%22M7%2010l5%205%205-5z%22%2F%3E%3C%2Fsvg%3E");background-repeat:no-repeat;background-position:right 16px center}input:focus,select.browser-default:focus,textarea:focus{border-color:var(--md-sys-color-primary)!important;border-width:2px!important}textarea.styled-textarea{height:auto!important;min-height:100px;padding:16px!important;resize:vertical;line-height:1.5}.drop-zone{border:1px dashed var(--md-sys-color-outline);padding:40px 20px;text-align:center;background:var(--md-sys-color-surface-container);cursor:pointer;border-radius:var(--shape-corner-medium);margin-bottom:24px;transition:background-color .2s}.drop-zone:hover{border-color:var(--md-sys-color-primary);background-color:var(--md-sys-color-primary-container)}.drop-text{font-weight:500;color:var(--md-sys-color-on-surface);margin-top:16px;font-size:1rem}.btn-filled{background-color:var(--md-sys-color-primary)!important;color:var(--md-sys-color-on-primary)!important;width:100%;height:48px;border-radius:var(--shape-corner-full);font-weight:500;text-transform:none;box-shadow:none;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;letter-spacing:.1px;transition:background-color .2s,box-shadow .2s}.btn-filled:hover{opacity:.9;box-shadow:0 1px 2px rgba(0,0,0,.3),0 1px 3px 1px rgba(0,0,0,.15)}.btn-filled:disabled{background-color:rgba(29,27,32,.12)!important;color:rgba(29,27,32,.38)!important;box-shadow:none;cursor:not-allowed}.btn-tonal{background-color:var(--md-sys-color-secondary-container);color:var(--md-sys-color-on-secondary-container);border-radius:var(--shape-corner-full);height:40px;padding:0 24px;border:none;font-weight:500;display:inline-flex;align-items:center;justify-content:center;gap:8px;cursor:pointer;transition:background-color .2s}.btn-tonal:hover{opacity:.8;box-shadow:0 1px 2px rgba(0,0,0,.3)}.btn-text{background:0 0;color:var(--md-sys-color-primary);border:none;font-weight:500;cursor:pointer;padding:0 12px;height:40px;border-radius:var(--shape-corner-full);display:inline-flex;align-items:center;justify-content:center;gap:8px}.btn-text:hover{background-color:rgba(0,90,193,.08)}.save-area{background-color:var(--md-sys-color-primary-container);color:var(--md-sys-color-on-primary-container);padding:16px 24px;border-radius:var(--shape-corner-medium);margin-top:32px}.save-area-header{font-weight:700;margin-bottom:12px;display:flex;align-items:center;font-size:.9rem}.save-area-row{display:flex;align-items:center;gap:12px}.save-area input{flex-grow:1;min-width:0;border:none!important;background:rgba(255,255,255,.7)!important;margin:0!important;border-radius:var(--shape-corner-full)!important;height:40px!important;padding:0 16px!important}.save-area input:focus{background:#fff!important}.tabs{background:0 0;margin-bottom:24px;border-bottom:1px solid var(--md-sys-color-outline-variant)}.tabs .tab a{color:var(--md-sys-color-on-surface-variant);font-weight:500;text-transform:none;font-size:.95rem}.tabs .tab a.active,.tabs .tab a:hover{color:var(--md-sys-color-primary);background-color:transparent}.tabs .indicator{background-color:var(--md-sys-color-primary);height:3px;border-top-left-radius:3px;border-top-right-radius:3px}.editor-container{border:1px solid var(--md-sys-color-outline-variant);border-radius:var(--shape-corner-medium);background:var(--md-sys-color-surface);overflow:hidden}.editor-footer,.editor-header{padding:12px 24px;background-color:var(--md-sys-color-surface-container);border-bottom:1px solid var(--md-sys-color-outline-variant);font-size:.75rem;color:var(--md-sys-color-on-surface-variant);font-weight:500;text-transform:uppercase;letter-spacing:.5px}.editor-footer{border-top:1px solid var(--md-sys-color-outline-variant);border-bottom:none}#display-prefix,#display-suffix{padding:16px 24px;font-family:monospace;color:var(--md-sys-color-on-surface);background:var(--md-sys-color-surface);white-space:pre-wrap;font-size:.9rem}#markdown-output{background-color:#1a1c1e;color:#e3e2e6;padding:24px;min-height:250px;white-space:pre-wrap;font-family:Consolas,monospace;line-height:1.6;font-size:.95rem}#memo-area{display:none;margin-bottom:24px;animation:fadeIn .3s ease-out}@keyframes fadeIn{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:translateY(0)}}.memo-list-container{max-height:350px;overflow-y:auto;border:1px solid var(--md-sys-color-outline-variant);border-radius:var(--shape-corner-medium);background:var(--md-sys-color-surface)}.memo-item{padding:16px 24px;border-bottom:1px solid var(--md-sys-color-outline-variant);display:flex;justify-content:space-between;align-items:center;transition:background .2s}.memo-item:last-child{border-bottom:none}.memo-item:hover{background-color:var(--md-sys-color-surface-container-high)}.memo-item.editing-mode{background-color:var(--md-sys-color-secondary-container)}.memo-info{flex:1;min-width:0;margin-right:16px}.memo-name{font-weight:500;color:var(--md-sys-color-on-surface);font-size:1rem}.memo-meta{font-size:.85rem;color:var(--md-sys-color-on-surface-variant);margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.memo-path{font-size:.8rem;color:var(--md-sys-color-on-surface-variant);opacity:.8;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:flex;align-items:center}.memo-path i{font-size:14px;margin-right:4px}.memo-actions{display:flex;gap:8px;flex-shrink:0}.hidden{display:none!important}.divider-custom{border:0;border-top:1px solid var(--md-sys-color-outline-variant);margin:32px 0}.flash-highlight{animation:highlight 1.5s ease-out forwards}@keyframes highlight{0%{background-color:var(--md-sys-color-tertiary-container)}100%{background-color:transparent}}.modal{max-height:80%;border-radius:var(--shape-corner-medium)}.modal .modal-footer{border-top:1px solid var(--md-sys-color-outline-variant)}.modal-overlay{z-index:999!important}</style></head><body><div id="loader" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(255,255,255,.9);z-index:9999;justify-content:center;align-items:center"><div class="preloader-wrapper big active"><div class="spinner-layer spinner-blue-only" style="border-color:#005ac1"><div class="circle-clipper left"><div class="circle"></div></div><div class="gap-patch"><div class="circle"></div></div><div class="circle-clipper right"><div class="circle"></div></div></div></div></div><nav><div class="nav-wrapper container"><a href="#" class="brand-logo"><i class="material-icons">grid_view</i> Excel to Markdown Tool <span id="app-version" style="font-size:.8rem;margin-left:10px;opacity:.7"></span></a><ul class="right"><li><a href="#" onclick="window.openUsageModal()" title="使い方ガイド"><i class="material-icons">help_outline</i></a></li><li><a href="#" onclick="window.openLogModal()" title="変更履歴"><i class="material-icons">history</i></a></li></ul></div></nav><div class="container"><div class="row"><div class="col s12 l4"><div class="card-panel"><div id="setup-area"><div class="section-header"><i class="material-icons">folder_open</i>データソース</div><div id="drop-zone" class="drop-zone"><i class="material-icons" style="font-size:48px;color:var(--md-sys-color-primary);margin-bottom:8px">cloud_upload</i><div class="drop-text" id="file-status">ここにExcelをドロップ</div><input type="file" id="excel-file" accept=".xlsx, .xls" style="display:none"></div><div class="input-group"><label class="input-label">サーバーパス (メモ用)</label> <input id="full-path-memo" type="text" placeholder="\\Server\Share\File.xlsx"></div><div class="divider-custom"></div><div class="section-header"><i class="material-icons">tune</i>読み込み設定</div><div class="input-group"><label class="input-label">対象シート</label> <select id="sheet-selector" class="browser-default"><option value="" disabled="disabled" selected="selected">ファイル未選択</option></select></div><div class="row"><div class="col s6"><label class="input-label">ヘッダー行</label><input id="row-header-start" type="number" value="1" min="1"></div><div class="col s6"><label class="input-label">データ開始行</label><input id="row-data-start" type="number" value="2" min="1"></div></div><div class="row"><div class="col s6"><label class="input-label">開始列</label><select id="col-start-selector" class="browser-default"></select></div><div class="col s6"><label class="input-label">終了列</label><select id="col-end-selector" class="browser-default"></select></div></div><div style="margin-top:24px;margin-bottom:8px"><button id="btn-process" class="btn-filled waves-effect waves-light" disabled="disabled" onclick="window.processExcel()"><i class="material-icons">play_arrow</i><span>解析・表示</span></button></div><div class="divider-custom"></div></div><div id="reopen-area" style="display:none;margin-bottom:24px"><div style="display:flex;justify-content:space-between;align-items:center;background:var(--md-sys-color-surface-container);padding:12px 16px;border-radius:8px"><span style="font-size:.9rem;color:var(--md-sys-color-on-surface-variant)"><i class="material-icons tiny" style="vertical-align:middle;margin-right:4px">check_circle</i> データ読み込み済み </span><button class="btn-text" onclick="window.toggleSetup(!0)" style="height:32px;font-size:.85rem"><i class="material-icons tiny" style="margin-right:4px">settings</i>設定を再表示</button></div><div class="divider-custom"></div></div><div class="section-header"><i class="material-icons">filter_list</i>プレビュー絞り込み</div><div class="input-group" style="margin-bottom:12px"><label class="input-label">条件1: 列 / 値 (AND)</label><div style="display:flex;gap:8px"><select id="preview-filter-col-1" class="browser-default" style="flex:1"></select> <input id="preview-filter-val-1" type="text" placeholder="値 (完全一致)" style="flex:1"></div></div><div class="input-group" style="margin-bottom:12px"><label class="input-label">条件2: 列 / 値 (AND)</label><div style="display:flex;gap:8px"><select id="preview-filter-col-2" class="browser-default" style="flex:1"></select> <input id="preview-filter-val-2" type="text" placeholder="値" style="flex:1"></div></div><div class="input-group"><label class="input-label">条件3: 列 / 値 (AND)</label><div style="display:flex;gap:8px"><select id="preview-filter-col-3" class="browser-default" style="flex:1"></select> <input id="preview-filter-val-3" type="text" placeholder="値" style="flex:1"></div></div><div style="margin-top:16px;display:flex;gap:10px"><button class="btn-tonal" style="flex:1;height:36px" onclick="window.applyPreviewFilter()">フィルタ適用</button> <button class="btn-text" style="flex:1;height:36px" onclick="window.clearPreviewFilter()">解除</button></div><div class="divider-custom"></div><div class="section-header"><i class="material-icons">transform</i>変換設定</div><div style="margin-top:16px;margin-bottom:24px;padding:16px;background:var(--md-sys-color-surface-container-low);border-radius:8px"><div style="margin-bottom:12px;font-weight:500;color:var(--md-sys-color-on-surface);display:flex;align-items:center"><i class="material-icons tiny" style="margin-right:6px">article</i> 前後テキスト付加（ヘッダー・フッター）</div><div class="input-group"><label class="input-label">ヘッダー (前付加)</label><textarea id="md-prefix" class="styled-textarea" placeholder="# タイトル..."></textarea></div><div class="input-group" style="margin-bottom:0"><label class="input-label">フッター (後付加)</label><textarea id="md-suffix" class="styled-textarea" placeholder="--- 注釈..."></textarea></div></div><div style="margin-top:16px"><button class="btn-tonal" style="width:100%;height:48px;background-color:var(--md-sys-color-secondary);color:#fff" onclick="window.generateMarkdown()"><i class="material-icons">transform</i><span>変換実行</span></button></div><div class="save-area" id="save-area"><div class="save-area-header"><i class="material-icons tiny" style="margin-right:8px">bookmark</i>設定をメモ保存</div><div class="save-area-row"><input id="new-memo-name" type="text" placeholder="メモタイトル"> <button id="btn-save-memo" class="btn-tonal" style="width:auto;height:40px;padding:0 24px;font-size:.9rem" onclick="window.handleMemoSave()">保存</button> <button id="btn-cancel-edit" class="btn-text hidden" style="width:auto" onclick="window.cancelEdit()">中止</button></div></div><div class="center-align" style="margin-top:24px"><button onclick="window.downloadCurrentHTML()" class="btn-text" style="text-transform:none;font-size:.85rem"><i class="material-icons tiny" style="margin-right:6px">save_alt</i>設定とメモのみHTML保存</button></div></div></div><div class="col s12 l8"><ul class="tabs"><li class="tab col s4"><a class="active" href="#tab-memos">保存済みメモ</a></li><li class="tab col s4"><a href="#tab-preview">データプレビュー</a></li><li class="tab col s4"><a href="#tab-markdown">Markdown結果</a></li></ul><div id="tab-memos" class="col s12"><div class="card-panel" style="padding:0;overflow:hidden"><div style="padding:16px 24px;background:var(--md-sys-color-surface-container);border-bottom:1px solid var(--md-sys-color-outline-variant);font-weight:500;font-size:1rem">保存した設定メモ一覧</div><div id="memo-list" class="memo-list-container" style="border:none;border-radius:0;max-height:600px"><div class="center grey-text" style="padding:40px">メモはありません</div></div></div></div><div id="tab-preview" class="col s12"><div class="card-panel"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px"><span class="section-header" style="margin:0;font-size:1.1rem"><i class="material-icons">table_chart</i>読み込み結果</span> <span id="row-count" style="font-size:.9rem;color:var(--md-sys-color-on-surface-variant)"></span></div><div id="table-output" style="overflow:auto;max-height:500px;border:1px solid var(--md-sys-color-outline-variant);border-radius:var(--shape-corner-extra-small)"><div class="center" style="padding:100px;color:var(--md-sys-color-outline)">左側の「解析・表示」ボタンを押してください</div></div></div></div><div id="tab-markdown" class="col s12"><div class="card-panel"><div class="editor-container"><div class="editor-header">Header (前付加テキスト)</div><div id="display-prefix"></div><div class="editor-header" style="background:#1a1c1e;color:#ccc;border-color:#333">Generated Markdown (本文)</div><div id="markdown-output">（変換を実行するとここに表示されます）</div><div class="editor-header">Footer (後付加テキスト)</div><div id="display-suffix"></div></div><div style="text-align:right;margin-top:24px"><button class="btn-filled" style="width:auto;padding:0 32px;background-color:var(--md-sys-color-error)!important" onclick="window.copyMarkdown()"><i class="material-icons">content_copy</i><span>全て結合してコピー</span></button></div></div></div></div></div></div><div id="modal-changelog" class="modal"><div class="modal-content"><h4>変更履歴</h4><ul class="collection" id="changelog-list"></ul></div><div class="modal-footer"><a href="#!" class="modal-close waves-effect waves-green btn-flat">閉じる</a></div></div><div id="modal-usage" class="modal"><div class="modal-content"><h4>使い方ガイド</h4><div id="usage-content"><ol><li>Excelファイルを画面左上のエリアにドラッグ&ドロップします。</li><li>「対象シート」を選択し、読み込む行・列の範囲を指定します。</li><li>「解析・表示」ボタンを押して、右側でデータをプレビューします。</li><li>必要に応じてプレビュー絞り込み条件を指定します。ここで絞り込まれた内容がそのままMarkdownに出力されます。</li><li>「変換実行」を押すとMarkdownが生成されます。</li><li>「全て結合してコピー」でクリップボードに取得できます。</li></ol></div></div><div class="modal-footer"><a href="#!" class="modal-close waves-effect waves-green btn-flat">閉じる</a></div></div><script src="https://cdnjs.cloudflare.com/ajax/libs/materialize/1.0.0/js/materialize.min.js"></script></body></html>
