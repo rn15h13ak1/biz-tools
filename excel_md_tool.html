@@ -25193,7 +25193,8 @@ type MJRObject = {
         const reader = new FileReader();
         reader.onload = function (e) {
           const data = new Uint8Array(e.target.result);
-          state.currentWorkbook = readSync(data, { type: "array" });
+          // cellDates: true を追加し、日付セルを数値ではなく日付オブジェクトとして認識させます
+          state.currentWorkbook = readSync(data, { type: "array", cellDates: true });
 
           const selector = document.getElementById("sheet-selector");
           selector.innerHTML = '<option value="" disabled selected>シート名を選択してください</option>';
@@ -25278,6 +25279,8 @@ type MJRObject = {
               header: 1,
               range: rangeStr,
               defval: "",
+              raw: false, // 【重要】生データではなく、フォーマットされた文字列を取得する
+              dateNF: "yyyy-mm-dd", // 書式設定がない日付セルのデフォルトフォーマットを指定
             });
             const filteredData = rawData.filter((row) => row.some((cell) => String(cell).trim() !== ""));
 
@@ -25544,8 +25547,9 @@ type MJRObject = {
               // ※要件「セルA3のデータを出力」に従い、値があれば出力します
               if (cellValue !== undefined && String(cellValue).trim() !== "") {
                 let text = String(cellValue)
-                  .replace(/\r\n/g, "<br>\n") // <br>の後に改行を追加
-                  .replace(/\n/g, "<br>\n") // <br>の後に改行を追加
+                  // すべての改行コード(\r\n, \r, \n)を統一的に <br> + 改行 に置換
+                  // これにより二重置換を防ぎ、Windows/Mac/Linuxの差異を吸収します
+                  .replace(/(\r\n|\n|\r)/g, "<br>\n")
                   .trim();
                 columnBuffer += `${text}\n`;
               }
@@ -25582,6 +25586,14 @@ type MJRObject = {
       }
 
       const logs = [
+        {
+          version: "1.0.4",
+          desc: "Excelの日付データが数値（シリアル値）になる問題を修正 (書式設定を維持して読み込むように変更)",
+        },
+        {
+          version: "1.0.3",
+          desc: "Markdown生成ロジックの修正 (Windows環境などで改行が二重になる不具合を解消)",
+        },
         {
           version: "1.0.2",
           desc: "Markdown生成ロジックの刷新 (列指向への変更、ヘッダー改行除去、データ内改行の可視化対応)",
@@ -25714,7 +25726,7 @@ type MJRObject = {
       };
       document.addEventListener("DOMContentLoaded", () => {
         try {
-          document.getElementById("app-version").textContent = `v${"1.0.2"}`;
+          document.getElementById("app-version").textContent = `v${"1.0.4"}`;
         } catch (e) {
           console.log("Dev mode: Version not injected");
         }
