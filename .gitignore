@@ -1,0 +1,5 @@
+# Mac watcher trigger/log files
+.build-trigger
+.git-trigger
+.build-output.log
+.git-output.log
